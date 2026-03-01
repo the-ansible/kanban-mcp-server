@@ -12,24 +12,20 @@ import {
 const API_BASE_URL = 'http://localhost:3000/api';
 
 // Types matching the Kanban API
+interface Board {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at?: string;
+}
+
 interface Lane {
   id: number;
+  board_id: number;
   name: string;
   color: string;
   position: number;
   created_at?: string;
-}
-
-interface CreateLaneInput {
-  name: string;
-  color?: string;
-  position: number;
-}
-
-interface UpdateLaneInput {
-  name?: string;
-  color?: string;
-  position?: number;
 }
 
 interface Card {
@@ -38,31 +34,16 @@ interface Card {
   name: string;
   color: string;
   position: number;
+  linked_board_id: number | null;
   created_at?: string;
-}
-
-interface CreateCardInput {
-  lane_id: number;
-  name: string;
-  color?: string;
-  position: number;
-}
-
-interface UpdateCardInput {
-  lane_id?: number;
-  name?: string;
-  color?: string;
-  position?: number;
-}
-
-interface MoveCardInput {
-  cardId: number;
-  targetLaneId: number;
-  newPosition: number;
 }
 
 interface LaneWithCards extends Lane {
   cards: Card[];
+}
+
+interface BoardWithLanes extends Board {
+  lanes: LaneWithCards[];
 }
 
 // Validation helpers
@@ -151,7 +132,6 @@ async function apiCall<T>(
 
     return response.json() as Promise<T>;
   } catch (error) {
-    // Check if it's a connection error
     if (error instanceof TypeError && error.message.includes('fetch')) {
       throw new Error(
         `Cannot connect to Kanban API at ${API_BASE_URL}. ` +
@@ -167,7 +147,7 @@ async function apiCall<T>(
 const server = new Server(
   {
     name: 'kanban-mcp-server',
-    version: '1.0.0',
+    version: '2.0.0',
   },
   {
     capabilities: {
@@ -178,9 +158,10 @@ const server = new Server(
 
 // Define MCP tools
 const tools: Tool[] = [
+  // ── Board tools ────────────────────────────────────────────────
   {
-    name: 'list_lanes',
-    description: 'Get all lanes from the Kanban board, ordered by position',
+    name: 'list_boards',
+    description: 'Get all boards from the Kanban system',
     inputSchema: {
       type: 'object',
       properties: {},
@@ -188,11 +169,99 @@ const tools: Tool[] = [
     },
   },
   {
-    name: 'create_lane',
-    description: 'Create a new lane on the Kanban board',
+    name: 'create_board',
+    description: 'Create a new Kanban board',
     inputSchema: {
       type: 'object',
       properties: {
+        name: {
+          type: 'string',
+          description: 'The name of the board',
+        },
+        description: {
+          type: 'string',
+          description: 'Optional description of the board',
+        },
+      },
+      required: ['name'],
+    },
+  },
+  {
+    name: 'get_board',
+    description: 'Get a board with all its lanes and cards nested. Provides a full snapshot of the board.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board to retrieve',
+        },
+      },
+      required: ['board_id'],
+    },
+  },
+  {
+    name: 'update_board',
+    description: 'Update a board\'s name or description',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board to update',
+        },
+        name: {
+          type: 'string',
+          description: 'New name for the board (optional)',
+        },
+        description: {
+          type: 'string',
+          description: 'New description for the board (optional)',
+        },
+      },
+      required: ['board_id'],
+    },
+  },
+  {
+    name: 'delete_board',
+    description: 'Delete a board and all its lanes and cards. WARNING: This is irreversible.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board to delete',
+        },
+      },
+      required: ['board_id'],
+    },
+  },
+
+  // ── Lane tools (board-scoped) ─────────────────────────────────
+  {
+    name: 'list_lanes',
+    description: 'Get all lanes for a board, ordered by position',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board',
+        },
+      },
+      required: ['board_id'],
+    },
+  },
+  {
+    name: 'create_lane',
+    description: 'Create a new lane on a board',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board to add the lane to',
+        },
         name: {
           type: 'string',
           description: 'The name of the lane',
@@ -206,7 +275,7 @@ const tools: Tool[] = [
           description: 'The position of the lane (0-based index for ordering)',
         },
       },
-      required: ['name', 'position'],
+      required: ['board_id', 'name', 'position'],
     },
   },
   {
@@ -215,7 +284,11 @@ const tools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        id: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board the lane belongs to',
+        },
+        lane_id: {
           type: 'number',
           description: 'The ID of the lane to update',
         },
@@ -232,7 +305,7 @@ const tools: Tool[] = [
           description: 'New position for the lane (optional)',
         },
       },
-      required: ['id'],
+      required: ['board_id', 'lane_id'],
     },
   },
   {
@@ -241,34 +314,48 @@ const tools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        id: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board the lane belongs to',
+        },
+        lane_id: {
           type: 'number',
           description: 'The ID of the lane to delete',
         },
       },
-      required: ['id'],
+      required: ['board_id', 'lane_id'],
     },
   },
+
+  // ── Card tools (board-scoped) ─────────────────────────────────
   {
     name: 'list_cards',
-    description: 'Get all cards from the Kanban board, optionally filtered by lane_id. Returns cards ordered by position.',
+    description: 'Get all cards for a board, optionally filtered by lane_id. Returns cards ordered by position.',
     inputSchema: {
       type: 'object',
       properties: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board',
+        },
         lane_id: {
           type: 'number',
-          description: 'Optional lane ID to filter cards. If not provided, returns all cards.',
+          description: 'Optional lane ID to filter cards. If not provided, returns all cards on the board.',
         },
       },
-      required: [],
+      required: ['board_id'],
     },
   },
   {
     name: 'create_card',
-    description: 'Create a new card in a lane on the Kanban board',
+    description: 'Create a new card in a lane on a board',
     inputSchema: {
       type: 'object',
       properties: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board',
+        },
         lane_id: {
           type: 'number',
           description: 'The ID of the lane where the card will be created',
@@ -285,8 +372,12 @@ const tools: Tool[] = [
           type: 'number',
           description: 'The position of the card within the lane (0-based index for ordering)',
         },
+        linked_board_id: {
+          type: 'number',
+          description: 'Optional ID of a board to link to this card. Creates a parent-child board relationship for hierarchical navigation.',
+        },
       },
-      required: ['lane_id', 'name', 'position'],
+      required: ['board_id', 'lane_id', 'name', 'position'],
     },
   },
   {
@@ -295,7 +386,11 @@ const tools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        id: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board',
+        },
+        card_id: {
           type: 'number',
           description: 'The ID of the card to update',
         },
@@ -315,8 +410,12 @@ const tools: Tool[] = [
           type: 'number',
           description: 'New position for the card (optional)',
         },
+        linked_board_id: {
+          type: ['number', 'null'],
+          description: 'ID of a board to link to this card, or null to remove an existing link',
+        },
       },
-      required: ['id'],
+      required: ['board_id', 'card_id'],
     },
   },
   {
@@ -325,52 +424,100 @@ const tools: Tool[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        id: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board',
+        },
+        card_id: {
           type: 'number',
           description: 'The ID of the card to delete',
         },
       },
-      required: ['id'],
+      required: ['board_id', 'card_id'],
     },
   },
   {
     name: 'move_card',
-    description: 'Move a card to a different lane and/or position. This is the recommended way to move cards between lanes.',
+    description: 'Move a card to a different lane and/or position within a board.',
     inputSchema: {
       type: 'object',
       properties: {
-        cardId: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board',
+        },
+        card_id: {
           type: 'number',
           description: 'The ID of the card to move',
         },
-        targetLaneId: {
+        target_lane_id: {
           type: 'number',
           description: 'The ID of the target lane',
         },
-        newPosition: {
+        new_position: {
           type: 'number',
           description: 'The new position in the target lane (0-based index)',
         },
       },
-      required: ['cardId', 'targetLaneId', 'newPosition'],
+      required: ['board_id', 'card_id', 'target_lane_id', 'new_position'],
+    },
+  },
+
+  // ── Link tools ──────────────────────────────────────────────
+  {
+    name: 'link_card_to_board',
+    description: 'Link a card to another board, creating a parent-child board hierarchy. The card becomes a clickable navigation point to the linked board.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board the card belongs to',
+        },
+        card_id: {
+          type: 'number',
+          description: 'The ID of the card to link',
+        },
+        target_board_id: {
+          type: 'number',
+          description: 'The ID of the board to link to this card',
+        },
+      },
+      required: ['board_id', 'card_id', 'target_board_id'],
     },
   },
   {
-    name: 'get_board',
-    description: 'Get the complete Kanban board state with all lanes and their cards nested. This provides a full snapshot of the board in a single call.',
+    name: 'unlink_card_from_board',
+    description: 'Remove the board link from a card',
     inputSchema: {
       type: 'object',
-      properties: {},
-      required: [],
+      properties: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board the card belongs to',
+        },
+        card_id: {
+          type: 'number',
+          description: 'The ID of the card to unlink',
+        },
+      },
+      required: ['board_id', 'card_id'],
     },
   },
+
+  // ── Convenience tools ─────────────────────────────────────────
   {
     name: 'get_board_summary',
-    description: 'Get a compact text summary of the Kanban board showing lanes and card counts. Useful for quick board overview.',
+    description: 'Get a compact text summary of a board showing lanes and card counts. Useful for quick board overview.',
     inputSchema: {
       type: 'object',
-      properties: {},
-      required: [],
+      properties: {
+        board_id: {
+          type: 'number',
+          description: 'The ID of the board',
+        },
+      },
+      required: ['board_id'],
     },
   },
 ];
@@ -386,45 +533,116 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
   try {
     switch (name) {
-      case 'list_lanes': {
-        const lanes = await apiCall<Lane[]>('/lanes');
+      // ── Board operations ────────────────────────────────────────
+
+      case 'list_boards': {
+        const boards = await apiCall<Board[]>('/boards');
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(lanes, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(boards, null, 2) }],
+        };
+      }
+
+      case 'create_board': {
+        const { name: boardName, description } = args as { name: string; description?: string };
+        validateString(boardName, 'name', true);
+        if (description !== undefined) {
+          validateString(description, 'description', false);
+        }
+
+        const board = await apiCall<Board>('/boards', {
+          method: 'POST',
+          body: JSON.stringify({ name: boardName, description }),
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(board, null, 2) }],
+        };
+      }
+
+      case 'get_board': {
+        const { board_id } = args as { board_id: number };
+        validateInteger(board_id, 'board_id', true);
+
+        const board = await apiCall<BoardWithLanes>(`/boards/${board_id}`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(board, null, 2) }],
+        };
+      }
+
+      case 'update_board': {
+        const { board_id, ...updateData } = args as { board_id: number; name?: string; description?: string };
+        validateInteger(board_id, 'board_id', true);
+
+        if (updateData.name !== undefined) {
+          validateString(updateData.name, 'name', false);
+        }
+        if (updateData.description !== undefined) {
+          validateString(updateData.description, 'description', false);
+        }
+
+        if (Object.keys(updateData).length === 0) {
+          throw new ValidationError('At least one field must be provided to update (name or description)');
+        }
+
+        const board = await apiCall<Board>(`/boards/${board_id}`, {
+          method: 'PATCH',
+          body: JSON.stringify(updateData),
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(board, null, 2) }],
+        };
+      }
+
+      case 'delete_board': {
+        const { board_id } = args as { board_id: number };
+        validateInteger(board_id, 'board_id', true);
+
+        const result = await apiCall<{ success: boolean }>(`/boards/${board_id}`, {
+          method: 'DELETE',
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
+        };
+      }
+
+      // ── Lane operations (board-scoped) ──────────────────────────
+
+      case 'list_lanes': {
+        const { board_id } = args as { board_id: number };
+        validateInteger(board_id, 'board_id', true);
+
+        const lanes = await apiCall<Lane[]>(`/boards/${board_id}/lanes`);
+        return {
+          content: [{ type: 'text', text: JSON.stringify(lanes, null, 2) }],
         };
       }
 
       case 'create_lane': {
-        const input = args as unknown as CreateLaneInput;
-        validateString(input.name, 'name', true);
-        validateInteger(input.position, 'position', true);
-        if (input.color !== undefined) {
-          validateHexColor(input.color, 'color', false);
+        const { board_id, name: laneName, color, position } = args as {
+          board_id: number; name: string; color?: string; position: number;
+        };
+        validateInteger(board_id, 'board_id', true);
+        validateString(laneName, 'name', true);
+        validateInteger(position, 'position', true);
+        if (color !== undefined) {
+          validateHexColor(color, 'color', false);
         }
 
-        const lane = await apiCall<Lane>('/lanes', {
+        const lane = await apiCall<Lane>(`/boards/${board_id}/lanes`, {
           method: 'POST',
-          body: JSON.stringify(input),
+          body: JSON.stringify({ name: laneName, color, position }),
         });
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(lane, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(lane, null, 2) }],
         };
       }
 
       case 'update_lane': {
-        const { id, ...updateData } = args as unknown as UpdateLaneInput & { id: number };
-        validateInteger(id, 'id', true);
+        const { board_id, lane_id, ...updateData } = args as {
+          board_id: number; lane_id: number; name?: string; color?: string; position?: number;
+        };
+        validateInteger(board_id, 'board_id', true);
+        validateInteger(lane_id, 'lane_id', true);
 
-        // Validate optional update fields
         if (updateData.name !== undefined) {
           validateString(updateData.name, 'name', false);
         }
@@ -435,90 +653,81 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           validateInteger(updateData.position, 'position', false);
         }
 
-        // Ensure at least one field is being updated
         if (Object.keys(updateData).length === 0) {
-          throw new ValidationError(
-            'At least one field must be provided to update (name, color, or position)'
-          );
+          throw new ValidationError('At least one field must be provided to update (name, color, or position)');
         }
 
-        const lane = await apiCall<Lane>(`/lanes/${id}`, {
+        const lane = await apiCall<Lane>(`/boards/${board_id}/lanes/${lane_id}`, {
           method: 'PATCH',
           body: JSON.stringify(updateData),
         });
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(lane, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(lane, null, 2) }],
         };
       }
 
       case 'delete_lane': {
-        const { id } = args as unknown as { id: number };
-        validateInteger(id, 'id', true);
+        const { board_id, lane_id } = args as { board_id: number; lane_id: number };
+        validateInteger(board_id, 'board_id', true);
+        validateInteger(lane_id, 'lane_id', true);
 
-        const result = await apiCall<{ success: boolean }>(`/lanes/${id}`, {
+        const result = await apiCall<{ success: boolean }>(`/boards/${board_id}/lanes/${lane_id}`, {
           method: 'DELETE',
         });
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
       }
 
+      // ── Card operations (board-scoped) ──────────────────────────
+
       case 'list_cards': {
-        const { lane_id } = args as unknown as { lane_id?: number };
+        const { board_id, lane_id } = args as { board_id: number; lane_id?: number };
+        validateInteger(board_id, 'board_id', true);
         if (lane_id !== undefined) {
           validateInteger(lane_id, 'lane_id', false);
         }
 
-        const endpoint = lane_id ? `/cards?lane_id=${lane_id}` : '/cards';
+        const endpoint = lane_id
+          ? `/boards/${board_id}/cards?lane_id=${lane_id}`
+          : `/boards/${board_id}/cards`;
         const cards = await apiCall<Card[]>(endpoint);
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(cards, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(cards, null, 2) }],
         };
       }
 
       case 'create_card': {
-        const input = args as unknown as CreateCardInput;
-        validateInteger(input.lane_id, 'lane_id', true);
-        validateString(input.name, 'name', true);
-        validateInteger(input.position, 'position', true);
-        if (input.color !== undefined) {
-          validateHexColor(input.color, 'color', false);
+        const { board_id, lane_id, name: cardName, color, position, linked_board_id } = args as {
+          board_id: number; lane_id: number; name: string; color?: string; position: number; linked_board_id?: number;
+        };
+        validateInteger(board_id, 'board_id', true);
+        validateInteger(lane_id, 'lane_id', true);
+        validateString(cardName, 'name', true);
+        validateInteger(position, 'position', true);
+        if (color !== undefined) {
+          validateHexColor(color, 'color', false);
+        }
+        if (linked_board_id !== undefined) {
+          validateInteger(linked_board_id, 'linked_board_id', false);
         }
 
-        const card = await apiCall<Card>('/cards', {
+        const card = await apiCall<Card>(`/boards/${board_id}/cards`, {
           method: 'POST',
-          body: JSON.stringify(input),
+          body: JSON.stringify({ lane_id, name: cardName, color, position, linked_board_id }),
         });
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(card, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(card, null, 2) }],
         };
       }
 
       case 'update_card': {
-        const { id, ...updateData } = args as unknown as UpdateCardInput & { id: number };
-        validateInteger(id, 'id', true);
+        const { board_id, card_id, ...updateData } = args as {
+          board_id: number; card_id: number; name?: string; color?: string; lane_id?: number; position?: number; linked_board_id?: number | null;
+        };
+        validateInteger(board_id, 'board_id', true);
+        validateInteger(card_id, 'card_id', true);
 
-        // Validate optional update fields
         if (updateData.name !== undefined) {
           validateString(updateData.name, 'name', false);
         }
@@ -531,126 +740,116 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         if (updateData.position !== undefined) {
           validateInteger(updateData.position, 'position', false);
         }
-
-        // Ensure at least one field is being updated
-        if (Object.keys(updateData).length === 0) {
-          throw new ValidationError(
-            'At least one field must be provided to update (name, color, lane_id, or position)'
-          );
+        if (updateData.linked_board_id !== undefined && updateData.linked_board_id !== null) {
+          validateInteger(updateData.linked_board_id, 'linked_board_id', false);
         }
 
-        const card = await apiCall<Card>(`/cards/${id}`, {
+        if (Object.keys(updateData).length === 0) {
+          throw new ValidationError('At least one field must be provided to update (name, color, lane_id, position, or linked_board_id)');
+        }
+
+        const card = await apiCall<Card>(`/boards/${board_id}/cards/${card_id}`, {
           method: 'PATCH',
           body: JSON.stringify(updateData),
         });
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(card, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(card, null, 2) }],
         };
       }
 
       case 'delete_card': {
-        const { id } = args as unknown as { id: number };
-        validateInteger(id, 'id', true);
+        const { board_id, card_id } = args as { board_id: number; card_id: number };
+        validateInteger(board_id, 'board_id', true);
+        validateInteger(card_id, 'card_id', true);
 
-        const result = await apiCall<{ success: boolean }>(`/cards/${id}`, {
+        const result = await apiCall<{ success: boolean }>(`/boards/${board_id}/cards/${card_id}`, {
           method: 'DELETE',
         });
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(result, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
         };
       }
 
       case 'move_card': {
-        const input = args as unknown as MoveCardInput;
-        validateInteger(input.cardId, 'cardId', true);
-        validateInteger(input.targetLaneId, 'targetLaneId', true);
-        validateInteger(input.newPosition, 'newPosition', true);
+        const { board_id, card_id, target_lane_id, new_position } = args as {
+          board_id: number; card_id: number; target_lane_id: number; new_position: number;
+        };
+        validateInteger(board_id, 'board_id', true);
+        validateInteger(card_id, 'card_id', true);
+        validateInteger(target_lane_id, 'target_lane_id', true);
+        validateInteger(new_position, 'new_position', true);
 
-        const card = await apiCall<Card>('/cards/move', {
+        const card = await apiCall<Card>(`/boards/${board_id}/cards/move`, {
           method: 'POST',
-          body: JSON.stringify(input),
+          body: JSON.stringify({ cardId: card_id, targetLaneId: target_lane_id, newPosition: new_position }),
         });
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(card, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(card, null, 2) }],
         };
       }
 
-      case 'get_board': {
-        // Fetch lanes and all cards in parallel
-        const [lanes, cards] = await Promise.all([
-          apiCall<Lane[]>('/lanes'),
-          apiCall<Card[]>('/cards'),
-        ]);
+      // ── Link operations ────────────────────────────────────────
 
-        // Nest cards within their lanes
-        const lanesWithCards: LaneWithCards[] = lanes.map(lane => ({
-          ...lane,
-          cards: cards
-            .filter(card => card.lane_id === lane.id)
-            .sort((a, b) => a.position - b.position),
-        }));
+      case 'link_card_to_board': {
+        const { board_id, card_id, target_board_id } = args as {
+          board_id: number; card_id: number; target_board_id: number;
+        };
+        validateInteger(board_id, 'board_id', true);
+        validateInteger(card_id, 'card_id', true);
+        validateInteger(target_board_id, 'target_board_id', true);
 
+        const card = await apiCall<Card>(`/boards/${board_id}/cards/${card_id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ linked_board_id: target_board_id }),
+        });
         return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(lanesWithCards, null, 2),
-            },
-          ],
+          content: [{ type: 'text', text: JSON.stringify(card, null, 2) }],
         };
       }
+
+      case 'unlink_card_from_board': {
+        const { board_id, card_id } = args as { board_id: number; card_id: number };
+        validateInteger(board_id, 'board_id', true);
+        validateInteger(card_id, 'card_id', true);
+
+        const card = await apiCall<Card>(`/boards/${board_id}/cards/${card_id}`, {
+          method: 'PATCH',
+          body: JSON.stringify({ linked_board_id: null }),
+        });
+        return {
+          content: [{ type: 'text', text: JSON.stringify(card, null, 2) }],
+        };
+      }
+
+      // ── Convenience operations ──────────────────────────────────
 
       case 'get_board_summary': {
-        // Fetch lanes and all cards in parallel
-        const [lanes, cards] = await Promise.all([
-          apiCall<Lane[]>('/lanes'),
-          apiCall<Card[]>('/cards'),
-        ]);
+        const { board_id } = args as { board_id: number };
+        validateInteger(board_id, 'board_id', true);
 
-        // Count cards per lane
-        const cardCounts = new Map<number, number>();
-        for (const card of cards) {
-          cardCounts.set(card.lane_id, (cardCounts.get(card.lane_id) || 0) + 1);
-        }
+        const board = await apiCall<BoardWithLanes>(`/boards/${board_id}`);
 
-        // Build text summary
-        const totalCards = cards.length;
+        const totalCards = board.lanes.reduce((sum, lane) => sum + lane.cards.length, 0);
         const summary = [
-          `Kanban Board Summary`,
+          `Board: ${board.name}`,
+          board.description ? `Description: ${board.description}` : null,
           `===================`,
-          `Total Lanes: ${lanes.length}`,
+          `Total Lanes: ${board.lanes.length}`,
           `Total Cards: ${totalCards}`,
           ``,
           `Lanes:`,
-        ];
+        ].filter(Boolean);
 
-        for (const lane of lanes) {
-          const count = cardCounts.get(lane.id) || 0;
+        for (const lane of board.lanes) {
+          const count = lane.cards.length;
           summary.push(`  • ${lane.name}: ${count} card${count !== 1 ? 's' : ''}`);
+          for (const card of lane.cards) {
+            summary.push(`    - ${card.name}`);
+          }
         }
 
         return {
-          content: [
-            {
-              type: 'text',
-              text: summary.join('\n'),
-            },
-          ],
+          content: [{ type: 'text', text: summary.join('\n') }],
         };
       }
 
@@ -660,12 +859,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     return {
-      content: [
-        {
-          type: 'text',
-          text: `Error: ${errorMessage}`,
-        },
-      ],
+      content: [{ type: 'text', text: `Error: ${errorMessage}` }],
       isError: true,
     };
   }

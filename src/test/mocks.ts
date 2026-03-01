@@ -1,9 +1,5 @@
 import { vi } from 'vitest';
 
-/**
- * Mock fetch implementation for testing
- * This replaces the global fetch function with a controllable mock
- */
 export interface MockFetchOptions {
   status?: number;
   ok?: boolean;
@@ -11,9 +7,6 @@ export interface MockFetchOptions {
   error?: string;
 }
 
-/**
- * Creates a mock fetch response
- */
 export function createMockResponse(options: MockFetchOptions): Response {
   const { status = 200, ok = true, data = {}, error } = options;
 
@@ -29,45 +22,49 @@ export function createMockResponse(options: MockFetchOptions): Response {
   return response;
 }
 
-/**
- * Sets up fetch mock for a successful response
- */
 export function mockFetchSuccess(data: unknown): void {
   global.fetch = vi.fn().mockResolvedValue(
     createMockResponse({ data, ok: true, status: 200 })
   );
 }
 
-/**
- * Sets up fetch mock for an error response
- */
 export function mockFetchError(status: number, errorMessage: string): void {
   global.fetch = vi.fn().mockResolvedValue(
     createMockResponse({ ok: false, status, error: errorMessage })
   );
 }
 
-/**
- * Sets up fetch mock for a connection error (network failure)
- */
 export function mockFetchConnectionError(): void {
   global.fetch = vi.fn().mockRejectedValue(
     new TypeError('fetch failed: connection refused')
   );
 }
 
-/**
- * Resets all fetch mocks
- */
 export function resetFetchMock(): void {
   vi.restoreAllMocks();
 }
 
-/**
- * Sample data for testing
- */
+// Sample data for testing
+export const mockBoard = {
+  id: 1,
+  name: 'Test Board',
+  description: 'A test board',
+  created_at: '2024-01-01T00:00:00.000Z',
+};
+
+export const mockBoards = [
+  mockBoard,
+  {
+    id: 2,
+    name: 'Second Board',
+    description: null,
+    created_at: '2024-01-01T00:00:00.000Z',
+  },
+];
+
 export const mockLane = {
   id: 1,
+  board_id: 1,
   name: 'To Do',
   color: '#3b82f6',
   position: 0,
@@ -87,6 +84,7 @@ export const mockLanes = [
   mockLane,
   {
     id: 2,
+    board_id: 1,
     name: 'In Progress',
     color: '#f59e0b',
     position: 1,
@@ -94,6 +92,7 @@ export const mockLanes = [
   },
   {
     id: 3,
+    board_id: 1,
     name: 'Done',
     color: '#10b981',
     position: 2,
@@ -120,3 +119,13 @@ export const mockCards = [
     created_at: '2024-01-01T00:00:00.000Z',
   },
 ];
+
+export const mockBoardWithLanes = {
+  ...mockBoard,
+  lanes: mockLanes.map(lane => ({
+    ...lane,
+    cards: mockCards
+      .filter(card => card.lane_id === lane.id)
+      .sort((a, b) => a.position - b.position),
+  })),
+};
